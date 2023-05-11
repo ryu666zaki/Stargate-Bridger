@@ -243,7 +243,7 @@ async def swap_usdc_fantom_to_polygon(wallet: str) -> HexBytes:
             fantom_transaction_info["source_pool_id"],
             fantom_transaction_info["dest_pool_id"],
             fantom_transaction_info["refund_address"],
-            fantom_transaction_info["amount_in"],
+            usdc_balance,
             min_amount,
             fantom_transaction_info["lz_tx_obj"],
             fantom_transaction_info["to"],
