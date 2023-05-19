@@ -25,8 +25,9 @@ source .venv/bin/activate
 pip install web3
 ```
 
-  4. Open the `main.py` and edit the values below the comments to suit your needs.
-   > Change `AMOUNT_MIN`, `AMOUNT_MAX`, `TIMES` variables. 
+  4. In the **main.py** file, on **line 379** inside the list, create a transaction to suit your needs. You can find an example of how to do this there as well.
+     Specify the number of min and max amounts for the transaction on **lines 393 and 394** in the **main.py**
+     Slippage - **line 400**. 
    > Put your private keys in private_keys.txt
 
   5. Now you're ready to start:
