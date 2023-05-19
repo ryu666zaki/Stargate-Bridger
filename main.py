@@ -1,342 +1,426 @@
 import json
 import random
-
 import asyncio
-
-from hexbytes import HexBytes
 from web3 import AsyncWeb3
-from web3.contract import AsyncContract
 from web3.providers.async_rpc import AsyncHTTPProvider
 
-from config import WALLETS, AMOUNT_TO_SWAP, TIMES, MIN_AMOUNT
+with open('router_abi.json') as f:
+    stargate_abi = json.load(f)
+with open('usdc_abi.json') as f:
+    usdc_abi = json.load(f)
+with open('usdt_abi.json') as f:
+    usdt_abi = json.load(f)
 
 
-polygon_rpc_url = 'https://polygon-rpc.com/'
-fantom_rpc_url = 'https://rpc.ftm.tools/'
+class Chain:
 
-polygon_w3 = AsyncWeb3(AsyncHTTPProvider(polygon_rpc_url))
-fantom_w3 = AsyncWeb3(AsyncHTTPProvider(fantom_rpc_url))
-
-stargate_polygon_address = polygon_w3.to_checksum_address('0x45A01E4e04F14f7A4a6702c74187c5F6222033cd')
-stargate_fantom_address = fantom_w3.to_checksum_address('0xAf5191B0De278C7286d6C7CC6ab6BB8A73bA2Cd6')
-
-stargate_abi = json.load(open('router_abi.json'))
-usdc_abi = json.load(open('usdc_abi.json'))
-
-usdc_polygon_address = polygon_w3.to_checksum_address('0x2791Bca1f2de4661ED88A30C99A7a9449Aa84174')
-usdc_fantom_address = fantom_w3.to_checksum_address('0x04068DA6C83AFCFA0e13ba15A6696662335D5B75')
-
-stargate_polygon_contract = polygon_w3.eth.contract(address=stargate_polygon_address, abi=stargate_abi)
-stargate_fantom_contract = fantom_w3.eth.contract(address=stargate_fantom_address, abi=stargate_abi)
-
-usdc_polygon_contract = polygon_w3.eth.contract(address=usdc_polygon_address, abi=usdc_abi)
-usdc_fantom_contract = fantom_w3.eth.contract(address=usdc_fantom_address, abi=usdc_abi)
+    def __init__(self, rpc_url, stargate_address, usdc_address, usdt_address, chain_id, explorer_url):
+        self.w3 = AsyncWeb3(AsyncHTTPProvider(rpc_url))
+        self.stargate_address = self.w3.to_checksum_address(stargate_address)
+        self.stargate_contract = self.w3.eth.contract(address=self.stargate_address,
+                                                      abi=stargate_abi)
+        self.usdc_contract = self.w3.eth.contract(address=self.w3.to_checksum_address(usdc_address),
+                                                  abi=usdc_abi) if usdc_address else None
+        self.usdt_contract = self.w3.eth.contract(address=self.w3.to_checksum_address(usdt_address),
+                                                  abi=usdt_abi) if usdt_address else None
+        self.chain_id = chain_id
+        self.blockExplorerUrl = explorer_url
 
 
-async def swap_usdc_polygon_to_fantom(wallet: str) -> HexBytes:
-    """Send USDC from polygon to fantom. Tokens are sent to the same wallet.
+class Polygon(Chain):
+    def __init__(self):
+        super().__init__(
+            'https://polygon-mainnet.g.alchemy.com/v2/lPMig0wM7-SlvrpdFoUJ2NacnLtID6qz',
+            '0x45A01E4e04F14f7A4a6702c74187c5F6222033cd',
+            '0x2791bca1f2de4661ed88a30c99a7a9449aa84174',
+            '0xc2132d05d31c914a87c6611c10748aeb04b58e8f',
+            109,
+            'https://polygonscan.com'
+        )
 
-    Args:
-        wallet: wallet address
-    """
-    account = polygon_w3.eth.account.from_key(wallet)
-    address = account.address
 
-    polygon_transaction_info = {
-        "chain_id": 112,
-        "source_pool_id": 1,
-        "dest_pool_id": 1,
-        "refund_address": address,
-        "amount_in": AMOUNT_TO_SWAP,
-        "amount_out_min": MIN_AMOUNT,
-        "lz_tx_obj": [
-            0,
-            0,
-            '0x0000000000000000000000000000000000000001'
-        ],
-        "to": address,
-        "data": "0x"
-    }
+class Fantom(Chain):
+    def __init__(self):
+        super().__init__(
+            'https://rpc.ftm.tools/',
+            '0xAf5191B0De278C7286d6C7CC6ab6BB8A73bA2Cd6',
+            '0x04068da6c83afcfa0e13ba15a6696662335d5b75',
+            None,
+            112,
+            'https://ftmscan.com'
+        )
 
-    nonce = await polygon_w3.eth.get_transaction_count(address)
-    gas_price = await polygon_w3.eth.gas_price
-    fees = await stargate_fantom_contract.functions.quoteLayerZeroFee(
-        112,  # uint16 _dstChainId
-        1,  # uint8 _functionType
-        "0x0000000000000000000000000000000000001010",  # bytes calldata _toAddress
-        "0x",  # bytes calldata _transferAndCallPayload
-        [0, 0, "0x0000000000000000000000000000000000000001"]  # Router.lz_tx_obj memory _lzTxParams
-    ).call()
-    fee = fees[0]
 
-    allowance = await usdc_polygon_contract.functions.allowance(address, stargate_polygon_address).call()
+class Bsc(Chain):
+    def __init__(self):
+        super().__init__(
+            'https://bsc-dataseed1.defibit.io/',
+            '0x4a364f8c717cAAD9A442737Eb7b8A55cc6cf18D8',
+            None,
+            '0x55d398326f99059fF775485246999027B3197955',
+            102,
+            'https://bscscan.com'
+        )
 
-    if allowance < AMOUNT_TO_SWAP:
-        approve_txn = await usdc_polygon_contract.functions.approve(
-            stargate_polygon_address,
-            AMOUNT_TO_SWAP
-        ).build_transaction(
-            {
+
+class Avax(Chain):
+    def __init__(self):
+        super().__init__(
+            'https://avalanche-c-chain.publicnode.com/',
+            '0x45A01E4e04F14f7A4a6702c74187c5F6222033cd',
+            '0xB97EF9Ef8734C71904D8002F8b6Bc66Dd9c48a6E',
+            '0x9702230A8Ea53601f5cD2dc00fDBc13d4dF4A8c7',
+            106,
+            'https://snowtrace.io'
+        )
+
+
+polygon = Polygon()
+fantom = Fantom()
+bsc = Bsc()
+avax = Avax()
+
+
+async def swap_usdc(chain_from: Chain, chain_to: Chain, wallet, AMOUNT_TO_SWAP, MIN_AMOUNT):
+    try:
+        account = chain_from.w3.eth.account.from_key(wallet)
+        address = account.address
+        gas_price = await chain_from.w3.eth.gas_price
+
+        fees = await chain_from.stargate_contract.functions.quoteLayerZeroFee(chain_to.chain_id,
+                                                                            1,
+                                                                            "0x0000000000000000000000000000000000001010",
+                                                                            "0x",
+                                                                            [0, 0,
+                                                                             "0x0000000000000000000000000000000000000001"]
+                                                                            ).call()
+        fee = fees[0]
+
+        allowance = await chain_from.usdc_contract.functions.allowance(address, chain_from.stargate_address).call()
+
+        if allowance < AMOUNT_TO_SWAP:
+            max_amount = AsyncWeb3.to_wei(2 ** 64 - 1, 'ether')
+
+            approve_txn = await chain_from.usdc_contract.functions.approve(chain_from.stargate_address,
+                                                                           max_amount).build_transaction({
+                'from': address,
+                'gas': 150000,
+                'gasPrice': gas_price,
+                'nonce': await chain_from.w3.eth.get_transaction_count(address),
+            })
+            signed_approve_txn = chain_from.w3.eth.account.sign_transaction(approve_txn, wallet)
+            approve_txn_hash = await chain_from.w3.eth.send_raw_transaction(signed_approve_txn.rawTransaction)
+
+            print(
+                f"{chain_from.__class__.__name__} | USDT APPROVED {chain_from.blockExplorerUrl}/tx/{approve_txn_hash.hex()}")
+
+            await asyncio.sleep(30)
+
+        usdc_balance = await chain_from.usdc_contract.functions.balanceOf(address).call()
+
+        if usdc_balance >= AMOUNT_TO_SWAP:
+
+            chainId = chain_to.chain_id
+            source_pool_id = 1
+            dest_pool_id = 1
+            refund_address = address
+            amountIn = AMOUNT_TO_SWAP
+            amountOutMin = MIN_AMOUNT
+            lzTxObj = [0, 0, '0x0000000000000000000000000000000000000001']
+            to = address
+            data = '0x'
+
+            swap_txn = await chain_from.stargate_contract.functions.swap(
+                chainId, source_pool_id, dest_pool_id, refund_address, amountIn, amountOutMin, lzTxObj, to, data
+            ).build_transaction({
+                'from': address,
+                'value': fee,
+                'gas': 600000,
+                'gasPrice': await chain_from.w3.eth.gas_price,
+                'nonce': await chain_from.w3.eth.get_transaction_count(address)
+            })
+
+            signed_swap_txn = chain_from.w3.eth.account.sign_transaction(swap_txn, wallet)
+            swap_txn_hash = await chain_from.w3.eth.send_raw_transaction(signed_swap_txn.rawTransaction)
+            return swap_txn_hash
+
+        elif usdc_balance < AMOUNT_TO_SWAP:
+
+            min_amount = usdc_balance - (usdc_balance * 5) // 1000
+
+            chainId = chain_to.chain_id
+            source_pool_id = 1
+            dest_pool_id = 1
+            refund_address = address
+            amountIn = usdc_balance
+            amountOutMin = min_amount
+            lzTxObj = [0, 0, '0x0000000000000000000000000000000000000001']
+            to = address
+            data = '0x'
+
+            swap_txn = await chain_from.stargate_contract.functions.swap(
+                chainId, source_pool_id, dest_pool_id, refund_address, amountIn, amountOutMin, lzTxObj, to, data
+            ).build_transaction({
+                'from': address,
+                'value': fee,
+                'gas': 600000,
+                'gasPrice': await chain_from.w3.eth.gas_price,
+                'nonce': await chain_from.w3.eth.get_transaction_count(address)
+            })
+
+            signed_swap_txn = chain_from.w3.eth.account.sign_transaction(swap_txn, wallet)
+            swap_txn_hash = await chain_from.w3.eth.send_raw_transaction(signed_swap_txn.rawTransaction)
+            return swap_txn_hash
+    except Exception as e:
+        print(f"Exception occurred in swap_usdc: {e}")
+
+async def swap_usdt(chain_from, chain_to, wallet, AMOUNT_TO_SWAP, MIN_AMOUNT):
+    try:
+        account = chain_from.w3.eth.account.from_key(wallet)
+        address = account.address
+        nonce = await chain_from.w3.eth.get_transaction_count(address)
+        gas_price = await chain_from.w3.eth.gas_price
+        fees = await chain_from.stargate_contract.functions.quoteLayerZeroFee(chain_to.chain_id,
+                                                                              1,
+                                                                              "0x0000000000000000000000000000000000001010",
+                                                                              "0x",
+                                                                              [0, 0,
+                                                                               "0x0000000000000000000000000000000000000001"]
+                                                                              ).call()
+        fee = fees[0]
+
+        allowance = await chain_from.usdt_contract.functions.allowance(address, chain_from.stargate_address).call()
+
+        if allowance < AMOUNT_TO_SWAP:
+            max_amount = chain_from.w3.to_wei(2 ** 64 - 1, 'ether')
+            approve_txn = await chain_from.usdt_contract.functions.approve(chain_from.stargate_address,
+                                                                           max_amount).build_transaction({
                 'from': address,
                 'gas': 150000,
                 'gasPrice': gas_price,
                 'nonce': nonce,
-            }
-        )
-        signed_approve_txn = polygon_w3.eth.account.sign_transaction(approve_txn, wallet)
-        approve_txn_hash = await polygon_w3.eth.send_raw_transaction(signed_approve_txn.rawTransaction)
+            })
+            signed_approve_txn = chain_from.w3.eth.account.sign_transaction(approve_txn, wallet)
+            approve_txn_hash = await chain_from.w3.eth.send_raw_transaction(signed_approve_txn.rawTransaction)
+            print(
+                f"{chain_from.__class__.__name__} | USDT APPROVED {chain_from.blockExplorerUrl}/tx/{approve_txn_hash.hex()}")
+            nonce += 1
 
-        print(f"POLYGON | USDT APPROVED https://polygonscan.com/tx/{approve_txn_hash.hex()}")
-        nonce += 1
+            await asyncio.sleep(30)
 
-        await asyncio.sleep(30)
+        usdt_balance = await chain_from.usdt_contract.functions.balanceOf(address).call()
 
-    usdc_balance = await usdc_polygon_contract.functions.balanceOf(address).call()
+        if usdt_balance >= AMOUNT_TO_SWAP:
 
-    if usdc_balance >= AMOUNT_TO_SWAP:
+            chainId = chain_to.chain_id
+            source_pool_id = 2
+            dest_pool_id = 2
+            refund_address = account.address
+            amountIn = AMOUNT_TO_SWAP
+            amountOutMin = MIN_AMOUNT
+            lzTxObj = [0, 0, '0x0000000000000000000000000000000000000001']
+            to = account.address
+            data = '0x'
 
-        swap_txn = await stargate_polygon_contract.functions.swap(
-            polygon_transaction_info["chain_id"],
-            polygon_transaction_info["source_pool_id"],
-            polygon_transaction_info["dest_pool_id"],
-            polygon_transaction_info["refund_address"],
-            polygon_transaction_info["amount_in"],
-            polygon_transaction_info["amount_out_min"],
-            polygon_transaction_info["lz_tx_obj"],
-            polygon_transaction_info["to"],
-            polygon_transaction_info["data"]
-        ).build_transaction(
-            {
+            swap_txn = await chain_from.stargate_contract.functions.swap(
+                chainId, source_pool_id, dest_pool_id, refund_address, amountIn, amountOutMin, lzTxObj, to, data
+            ).build_transaction({
                 'from': address,
                 'value': fee,
                 'gas': 500000,
-                'gasPrice': await polygon_w3.eth.gas_price,
-                'nonce': await polygon_w3.eth.get_transaction_count(address),
-            }
-        )
+                'gasPrice': await chain_from.w3.eth.gas_price,
+                'nonce': await chain_from.w3.eth.get_transaction_count(address),
+            })
 
-        signed_swap_txn = polygon_w3.eth.account.sign_transaction(swap_txn, wallet)
-        swap_txn_hash = await polygon_w3.eth.send_raw_transaction(signed_swap_txn.rawTransaction)
-        return swap_txn_hash
+            signed_swap_txn = chain_from.w3.eth.account.sign_transaction(swap_txn, wallet)
+            swap_txn_hash = await chain_from.w3.eth.send_raw_transaction(signed_swap_txn.rawTransaction)
+            return swap_txn_hash
 
-    elif usdc_balance < AMOUNT_TO_SWAP:
+        elif usdt_balance < AMOUNT_TO_SWAP:
 
-        min_amount = usdc_balance - usdc_balance * 0.005
+            min_amount = usdt_balance - (usdt_balance * 5) // 1000
 
-        swap_txn = await stargate_polygon_contract.functions.swap(
-            polygon_transaction_info["chain_id"],
-            polygon_transaction_info["source_pool_id"],
-            polygon_transaction_info["dest_pool_id"],
-            polygon_transaction_info["refund_address"],
-            polygon_transaction_info["amount_in"],
-            min_amount,
-            polygon_transaction_info["lz_tx_obj"],
-            polygon_transaction_info["to"],
-            polygon_transaction_info["data"]
-        ).build_transaction(
-            {
+            chainId = chain_to.chain_id
+            source_pool_id = 2
+            dest_pool_id = 2
+            refund_address = account.address
+            amountIn = usdt_balance
+            amountOutMin = min_amount
+            lzTxObj = [0, 0, '0x0000000000000000000000000000000000000001']
+            to = account.address
+            data = '0x'
+
+            swap_txn = await chain_from.stargate_contract.functions.swap(
+                chainId, source_pool_id, dest_pool_id, refund_address, amountIn, amountOutMin, lzTxObj, to, data
+            ).build_transaction({
                 'from': address,
                 'value': fee,
                 'gas': 500000,
-                'gasPrice': await polygon_w3.eth.gas_price,
-                'nonce': await polygon_w3.eth.get_transaction_count(address),
-            }
-        )
+                'gasPrice': await chain_from.w3.eth.gas_price,
+                'nonce': await chain_from.w3.eth.get_transaction_count(address),
+            })
 
-        signed_swap_txn = polygon_w3.eth.account.sign_transaction(swap_txn, wallet)
-        swap_txn_hash = await polygon_w3.eth.send_raw_transaction(signed_swap_txn.rawTransaction)
-        return swap_txn_hash
+            signed_swap_txn = chain_from.w3.eth.account.sign_transaction(swap_txn, wallet)
+            swap_txn_hash = await chain_from.w3.eth.send_raw_transaction(signed_swap_txn.rawTransaction)
+            return swap_txn_hash
+    except Exception as e:
+        print(f"Exception occurred in swap_usdt: {e}")
 
 
-async def swap_usdc_fantom_to_polygon(wallet: str) -> HexBytes:
-    """Send USDC from fantom to polygon. Tokens are sent to the same wallet.
+async def swap_usdt_to_usdc(chain_from, chain_to, wallet, AMOUNT_TO_SWAP, MIN_AMOUNT):
+    try:
+        account = chain_from.w3.eth.account.from_key(wallet)
+        address = account.address
+        nonce = await chain_from.w3.eth.get_transaction_count(address)
+        gas_price = await chain_from.w3.eth.gas_price
+        fees = await chain_from.stargate_contract.functions.quoteLayerZeroFee(chain_to.chain_id,
+                                                                              1,
+                                                                              "0x0000000000000000000000000000000000001010",
+                                                                              "0x",
+                                                                              [0, 0,
+                                                                               "0x0000000000000000000000000000000000000001"]
+                                                                              ).call()
+        fee = fees[0]
 
-    Args:
-        wallet: wallet address
-    """
-    account = fantom_w3.eth.account.from_key(wallet)
-    address = account.address
+        allowance = await chain_from.usdt_contract.functions.allowance(address, chain_from.stargate_address).call()
 
-    fantom_transaction_info = {
-        "chain_id": 109,
-        "source_pool_id": 1,
-        "dest_pool_id": 1,
-        "refund_address": address,
-        "amount_in": AMOUNT_TO_SWAP,
-        "amount_out_min": MIN_AMOUNT,
-        "lz_tx_obj": [
-            0,
-            0,
-            '0x0000000000000000000000000000000000000001'
-        ],
-        "to": address,
-        "data": "0x"
-    }
+        if allowance < AMOUNT_TO_SWAP:
+            max_amount = chain_from.w3.to_wei(2 ** 64 - 1, 'ether')
 
-    nonce = await fantom_w3.eth.get_transaction_count(address)
-    gas_price = await fantom_w3.eth.gas_price
-    fees = await stargate_fantom_contract.functions.quoteLayerZeroFee(
-        109,  # uint16 _dstChainId
-        1,  # uint8 _functionType
-        "0x0000000000000000000000000000000000001010",  # bytes calldata _toAddress
-        "0x",  # bytes calldata _transferAndCallPayload
-        [0, 0, "0x0000000000000000000000000000000000000001"]  # Router.lz_tx_obj memory _lzTxParams
-    ).call()
-    fee = fees[0]
-
-    allowance = await usdc_fantom_contract.functions.allowance(address, stargate_fantom_address).call()
-
-    if allowance < AMOUNT_TO_SWAP:
-        approve_txn = await usdc_fantom_contract.functions.approve(
-            stargate_fantom_address,
-            AMOUNT_TO_SWAP
-        ).build_transaction(
-            {
+            approve_txn = await chain_from.usdt_contract.functions.approve(chain_from.stargate_address,
+                                                                           max_amount).build_transaction({
                 'from': address,
                 'gas': 150000,
                 'gasPrice': gas_price,
                 'nonce': nonce,
-            }
-        )
-        signed_approve_txn = fantom_w3.eth.account.sign_transaction(approve_txn, wallet)
-        approve_txn_hash = await fantom_w3.eth.send_raw_transaction(signed_approve_txn.rawTransaction)
+            })
+            signed_approve_txn = chain_from.w3.eth.account.sign_transaction(approve_txn, wallet)
+            approve_txn_hash = await chain_from.w3.eth.send_raw_transaction(signed_approve_txn.rawTransaction)
 
-        print(f"FANTOM | USDC APPROVED | https://ftmscan.com/tx/{approve_txn_hash.hex()} ")
-        nonce += 1
+            print(
+                f"{chain_from.__class__.__name__} | USDT APPROVED {chain_from.blockExplorerUrl}/tx/{approve_txn_hash.hex()}")
+            nonce += 1
 
-        await asyncio.sleep(30)
+            await asyncio.sleep(30)
 
-    usdc_balance = await usdc_fantom_contract.functions.balanceOf(address).call()
+        usdt_balance = await chain_from.usdt_contract.functions.balanceOf(address).call()
 
-    if usdc_balance >= AMOUNT_TO_SWAP:
+        if usdt_balance >= AMOUNT_TO_SWAP:
 
-        swap_txn = await stargate_fantom_contract.functions.swap(
-            fantom_transaction_info["chain_id"],
-            fantom_transaction_info["source_pool_id"],
-            fantom_transaction_info["dest_pool_id"],
-            fantom_transaction_info["refund_address"],
-            fantom_transaction_info["amount_in"],
-            fantom_transaction_info["amount_out_min"],
-            fantom_transaction_info["lz_tx_obj"],
-            fantom_transaction_info["to"],
-            fantom_transaction_info["data"]
-        ).build_transaction(
-            {
+            chainId = chain_to.chain_id
+            source_pool_id = 2
+            dest_pool_id = 1
+            refund_address = account.address
+            amountIn = AMOUNT_TO_SWAP
+            amountOutMin = MIN_AMOUNT
+            lzTxObj = [0, 0, '0x0000000000000000000000000000000000000001']
+            to = account.address
+            data = '0x'
+
+            swap_txn = await chain_from.stargate_contract.functions.swap(
+                chainId, source_pool_id, dest_pool_id, refund_address, amountIn, amountOutMin, lzTxObj, to, data
+            ).build_transaction({
                 'from': address,
                 'value': fee,
-                'gas': 600000,
-                'gasPrice': await fantom_w3.eth.gas_price,
-                'nonce': await fantom_w3.eth.get_transaction_count(address),
-            }
-        )
+                'gas': 500000,
+                'gasPrice': await chain_from.w3.eth.gas_price,
+                'nonce': await chain_from.w3.eth.get_transaction_count(address),
+            })
 
-        signed_swap_txn = fantom_w3.eth.account.sign_transaction(swap_txn, wallet)
-        swap_txn_hash = await fantom_w3.eth.send_raw_transaction(signed_swap_txn.rawTransaction)
-        return swap_txn_hash
+            signed_swap_txn = chain_from.w3.eth.account.sign_transaction(swap_txn, wallet)
+            swap_txn_hash = await chain_from.w3.eth.send_raw_transaction(signed_swap_txn.rawTransaction)
+            return swap_txn_hash
 
-    elif usdc_balance < AMOUNT_TO_SWAP:
+        elif usdt_balance < AMOUNT_TO_SWAP:
 
-        min_amount = usdc_balance - usdc_balance * 0.005
+            min_amount = usdt_balance - (usdt_balance * 5) // 1000
 
-        swap_txn = await stargate_fantom_contract.functions.swap(
-            fantom_transaction_info["chain_id"],
-            fantom_transaction_info["source_pool_id"],
-            fantom_transaction_info["dest_pool_id"],
-            fantom_transaction_info["refund_address"],
-            fantom_transaction_info["amount_in"],
-            min_amount,
-            fantom_transaction_info["lz_tx_obj"],
-            fantom_transaction_info["to"],
-            fantom_transaction_info["data"]
-        ).build_transaction(
-            {
+            chainId = chain_to.chain_id
+            source_pool_id = 2
+            dest_pool_id = 1
+            refund_address = account.address
+            amountIn = usdt_balance
+            amountOutMin = min_amount
+            lzTxObj = [0, 0, '0x0000000000000000000000000000000000000001']
+            to = account.address
+            data = '0x'
+
+            swap_txn = await chain_from.stargate_contract.functions.swap(
+                chainId, source_pool_id, dest_pool_id, refund_address, amountIn, amountOutMin, lzTxObj, to, data
+            ).build_transaction({
                 'from': address,
                 'value': fee,
-                'gas': 600000,
-                'gasPrice': await fantom_w3.eth.gas_price,
-                'nonce': await fantom_w3.eth.get_transaction_count(address),
-            }
-        )
+                'gas': 500000,
+                'gasPrice': await chain_from.w3.eth.gas_price,
+                'nonce': await chain_from.w3.eth.get_transaction_count(address),
+            })
 
-        signed_swap_txn = fantom_w3.eth.account.sign_transaction(swap_txn, wallet)
-        swap_txn_hash = await fantom_w3.eth.send_raw_transaction(signed_swap_txn.rawTransaction)
-        return swap_txn_hash
-
-
-async def check_balance(address: str, usdc_contract: AsyncContract):
-    """Check USDC balance of the adress on the chain specified by the address.
-    (USDC has different contracts of different blockchains.)
-
-    Args:
-        address:        wallet address
-        usdc_contract:  USDC contract on a specified chain to interact with
-    """
-    usdc_balance = await usdc_contract.functions.balanceOf(address).call()
-    return usdc_balance
+            signed_swap_txn = chain_from.w3.eth.account.sign_transaction(swap_txn, wallet)
+            swap_txn_hash = await chain_from.w3.eth.send_raw_transaction(signed_swap_txn.rawTransaction)
+            return swap_txn_hash
+    except Exception as e:
+        print(f"Exception occurred in swap_usdt: {e}")
 
 
-async def is_balance_updated(address: str, usdc_contract: AsyncContract) -> bool:
-    """ CHecks whether USDC balance on a specified chain is upodated.
-    (Is transfer completed or not)
-
-    Args:
-        address:        wallet address
-        usdc_contract:  USDC contract on a specified chain to interact with
-    """
-    balance = await check_balance(address, usdc_contract)
-
-    while balance < 3 * (10 ** 6):
-        await asyncio.sleep(10)
-        balance = await check_balance(address, usdc_contract)
-
-    return True
+async def check_balance(address, contract):
+    balance = await contract.functions.balanceOf(address).call()
+    return balance
 
 
-async def work(wallet: str) -> None:
-    """Transfer cycle function. It sends USDC from polygon to fantom and then back.
-    It runs such cycles N times, where N - number of cycles specified if config.py
+async def get_token_decimals(token_contract):
+    decimals = await token_contract.functions.decimals().call()
+    return decimals
 
-    Args:
-        wallet: wallet address
-    """
-    counter = 0
 
-    account = polygon_w3.eth.account.from_key(wallet)
+async def work(wallet):
+    account = polygon.w3.eth.account.from_key(wallet)
     address = account.address
 
-    start_delay = random.randint(1, 200)
-    await asyncio.sleep(start_delay)
+    chains = [
+       #  Create your own personal functions.
+       #  Example below:
 
-    while counter < TIMES:
+       #  (from.chain, to.chain, from.chain.token_contract, swap function, 'token', 'From chain', 'To chain'),
 
-        balance = None
-        while not balance:
-            await asyncio.sleep(10)
-            balance = await is_balance_updated(address, usdc_polygon_contract)
+        (bsc, polygon, bsc.usdt_contract, swap_usdt_to_usdc, "USDT", "BSC", "Polygon"),
+        (polygon, fantom, polygon.usdc_contract, swap_usdc, "USDC", "Polygon", "Fantom"),
+        (fantom, polygon, fantom.usdc_contract, swap_usdc, "USDC", "Fantom", "Polygon"),
+        (fantom, avax, fantom.usdc_contract, swap_usdc, "USDC", "Fantom", "Avax")
+    ]
 
-        polygon_to_fantom_txn_hash = await swap_usdc_polygon_to_fantom(wallet)
-        print(f"POLYGON | {address} | Transaction: https://polygonscan.com/tx/{polygon_to_fantom_txn_hash.hex()}")
+    for (from_chain, to_chain, contract, swap_fn, token, from_name, to_name) in chains:
 
-        polygon_delay = random.randint(1200, 1500)
-        await asyncio.sleep(polygon_delay)
+        amount_min = 300  # Min amount to bridge
+        amount_max = 400  # Max amount to bridge
 
-        balance = None
-        while not balance:
-            await asyncio.sleep(10)
-            balance = await is_balance_updated(address, usdc_fantom_contract)
+        amount_random = random.randint(amount_min, amount_max)
+        decimals = await get_token_decimals(contract)
+        amount_to_swap = int(amount_random * (10 ** decimals))
 
-        fantom_to_polygon_txn_hash = await swap_usdc_fantom_to_polygon(wallet)
-        print(f"FTM | {address} | Transaction: https://ftmscan.com/tx/{fantom_to_polygon_txn_hash.hex()}")
+        slippage = 5
+        min_amount = amount_to_swap - (amount_to_swap * slippage) // 1000
 
-        fantom_delay = random.randint(100, 300)
-        await asyncio.sleep(fantom_delay)
+        start_delay = random.randint(10, 60)
+        await asyncio.sleep(start_delay)
 
-        counter += 1
+        balance = await check_balance(address, contract)
+        while balance < 4 * (10 ** 6):
+            await asyncio.sleep(60)
+            balance = await check_balance(address, contract)
+        try:
+            txn_hash = await swap_fn(from_chain, to_chain, wallet, amount_to_swap, min_amount)
+            print(
+                f"{from_name} -> {to_name} | {token} | {address} | Transaction: {from_chain.blockExplorerUrl}/tx/{txn_hash.hex()}")
+        except Exception as e:
+            print(e)
 
     print(f'Wallet: {address} | DONE')
 
 
 async def main():
+    with open('wallets.txt', 'r') as f:
+        WALLETS = [row.strip() for row in f]
+
     tasks = []
     for wallet in WALLETS:
         tasks.append(asyncio.create_task(work(wallet)))
@@ -344,8 +428,9 @@ async def main():
     for task in tasks:
         await task
 
-    print(f'*** FINISHED ***')
+    print(f'*** ALL JOB IS DONE ***')
 
 
 if __name__ == '__main__':
     asyncio.run(main())
+
