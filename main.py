@@ -380,7 +380,8 @@ async def work(wallet):
        #  Create your own personal functions.
        #  Example below:
 
-       #  (from.chain, to.chain, from.chain.token_contract, swap function, 'token', 'From chain', 'To chain'),
+       #  (from.chain, to.chain, from.chain.token_contract, swap function, 'token', 'From chain', 'To chain'), 
+       #  swap_usdc for swapping usdc, swap_usdt for swapping usdt, swap_usdt_to_usdc for swapping usdt to usdc when bridging.
 
         (bsc, polygon, bsc.usdt_contract, swap_usdt_to_usdc, "USDT", "BSC", "Polygon"),
         (polygon, fantom, polygon.usdc_contract, swap_usdc, "USDC", "Polygon", "Fantom"),
